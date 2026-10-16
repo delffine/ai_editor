@@ -1,7 +1,6 @@
 # VK и Telegram для входа прогона: свежие сызранские посты пабликов, которых нет в RSS.
 # Только stdlib. VK — API wall.get (нужен VK_ACCESS_TOKEN в окружении), Telegram —
-# публичное веб-превью t.me/s/<канал> (без токена). Перенесено 16.10.2026 из
-# syzran-news (sources/vk_source.py, telegram_source.py, textclean.py, filters.py).
+# публичное веб-превью t.me/s/<канал> (без токена).
 #
 # collect(now) -> список новых постов (ссылки, которых ещё не видели), у каждого
 # detected_at = now. Что уже видели — state/social_seen.json (ссылка -> когда
