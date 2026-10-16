@@ -1,5 +1,5 @@
 # Шаг 1 прогона: собрать вход для Claude -> run/input.md.
-# Лента RU-сборщика + лента сайта (с очередью) + VK/TG-карточки syzran-news.
+# Лента RU-сборщика + лента сайта (с очередью) + VK/Telegram (social.py).
 import datetime as dt
 import json
 import os
@@ -9,13 +9,14 @@ import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
+import social
+
 BASE = Path(__file__).resolve().parent
 RUN = BASE / "run"
 STATE = BASE / "state"
 RUN.mkdir(exist_ok=True)
 STATE.mkdir(exist_ok=True)
 SAM = dt.timezone(dt.timedelta(hours=4))
-CARDS_DIR = Path.home() / "syzran-news" / "temp" / "output"
 SITE_URL = "https://www.syzran-small.ru/rss-claude.php?limit=80"
 TEXT_MAX = 1800
 FIRST_RUN_HOURS = 6
@@ -53,7 +54,7 @@ out = [f"# Вход прогона {now:%d.%m.%Y %H:%M} (Самара). Прош
 # --- лента сборщика; недоступна — прогон идёт без неё (сайт + VK/TG), на странице предупреждение.
 # Своя отметка feed_last: сдвигается только после успешного чтения, чтобы засечённое
 # за время сбоя разобрал следующий прогон (окно ленты — 48 ч)
-for f in ("feed_last.txt", "warnings.txt"):
+for f in ("feed_last.txt", "warnings.txt", "social_seen.json"):
     (RUN / f).unlink(missing_ok=True)
 feed_last_file = STATE / "feed_last.txt"
 feed_last = dt.datetime.fromisoformat(feed_last_file.read_text().strip()) if feed_last_file.exists() else last
@@ -85,27 +86,17 @@ if feed is not None:
         out.append("(нет)\n")
     (RUN / "feed_last.txt").write_text(now.isoformat(timespec="seconds"))  # finish.py переносит в state/ только при успехе
 
-# --- VK/TG-карточки syzran-news
-out.append("## Новое в VK/Telegram (карточки syzran-news)\n")
-n = 0
-for day in {now.date(), (now - dt.timedelta(days=1)).date()}:
-    f = CARDS_DIR / f"cards_{day:%Y-%m-%d}.jsonl"
-    if not f.exists():
-        continue
-    for line in f.read_text(encoding="utf-8").splitlines():
-        c = json.loads(line)
-        src = c["item"]["source_name"]
-        if "(VK)" not in src and "Telegram" not in src:
-            continue
-        if not last < dt.datetime.strptime(c["detected_at"], "%d.%m.%Y %H:%M").replace(tzinfo=SAM) <= UNTIL:
-            continue
-        n += 1
-        n_new += 1
-        sources[c["item"]["link"]] = {"name": src, "title": c["item"]["title"], "published": c["published_at"],
-                                      "text": " ".join((c["draft"].get("body") or "").split())}
-        out.append(f"### {src} | {c['published_at']} | {c['item']['title']}\n{c['item']['link']}\n"
-                   f"{' '.join((c['draft'].get('body') or '').split())[:TEXT_MAX]}\n")
-if not n:
+# --- VK/Telegram: новые посты пабликов (social.py; то, чего ещё не видели, — за сутки)
+out.append("## Новое в VK/Telegram\n")
+posts = social.collect(now) if not os.environ.get("AI_EDITOR_UNTIL") else []  # песочница с прошлым окном — без соцсетей
+for p in posts:
+    n_new += 1
+    when = p["published"].strftime("%d.%m %H:%M") if p["published"] else "без даты"
+    text = " ".join(p["text"].split())
+    sources[p["url"]] = {"name": p["source"], "title": p["title"], "text": text,
+                         "published": p["published"].strftime("%d.%m.%Y %H:%M") if p["published"] else ""}
+    out.append(f"### {p['source']} | {when} | {p['title']}\n{p['url']}\n{text[:TEXT_MAX]}\n")
+if not posts:
     out.append("(нет)\n")
 
 # --- сайт: последние 40 новостей; лиды — только за 12 ч; НОВОЕ = id больше, чем в прошлый прогон

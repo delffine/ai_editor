@@ -292,7 +292,7 @@ else:
 (STATE / "taken.json").write_text(json.dumps(taken[:50], ensure_ascii=False, indent=1), encoding="utf-8")
 started = RUN / "started.txt"
 if not failed:
-    for f in ("site_max_id.txt", "feed_last.txt"):
+    for f in ("site_max_id.txt", "feed_last.txt", "social_seen.json"):
         if (RUN / f).exists():
             (STATE / f).write_text((RUN / f).read_text())
     (STATE / "last_run.txt").write_text(started.read_text() if started.exists() else now.isoformat(timespec="seconds"))
