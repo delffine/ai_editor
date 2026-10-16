@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+temp/
+
+# состояние и логи прогонов (на VPS)
+run/
+state/
+logs/
+
+.DS_Store
+Thumbs.db

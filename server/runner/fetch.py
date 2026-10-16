@@ -1,0 +1,138 @@
+# Шаг 1 прогона: собрать вход для Claude -> run/input.md.
+# Лента RU-сборщика + лента сайта (с очередью) + VK/TG-карточки syzran-news.
+import datetime as dt
+import json
+import os
+import time
+import urllib.request
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+
+BASE = Path(__file__).resolve().parent
+RUN = BASE / "run"
+STATE = BASE / "state"
+RUN.mkdir(exist_ok=True)
+STATE.mkdir(exist_ok=True)
+SAM = dt.timezone(dt.timedelta(hours=4))
+CARDS_DIR = Path.home() / "syzran-news" / "temp" / "output"
+SITE_URL = "https://www.syzran-small.ru/rss-claude.php?limit=80"
+TEXT_MAX = 1800
+FIRST_RUN_HOURS = 6
+
+now = dt.datetime.now(SAM)
+last_file = STATE / "last_run.txt"
+last = dt.datetime.fromisoformat(last_file.read_text().strip()) if last_file.exists() else now - dt.timedelta(hours=FIRST_RUN_HOURS)
+
+
+def get(url, tries=4):
+    for attempt in range(1, tries + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            return urllib.request.urlopen(req, timeout=60).read()
+        except OSError as e:
+            if attempt == tries:
+                raise
+            if url.startswith("https://") and attempt >= 2:
+                url = "http://" + url[len("https://"):]  # syzran-small.ru режет HTTPS с KZ IP
+            time.sleep(6)
+
+
+def sam(s):
+    return dt.datetime.fromisoformat(s).astimezone(SAM) if s else None
+
+
+n_new = 0  # всего нового (сборщик + VK/TG)
+out = [f"# Вход прогона {now:%d.%m.%Y %H:%M} (Самара). Прошлый прогон: {last:%d.%m %H:%M}\n"]
+
+# --- лента сборщика; недоступна — прогон идёт без неё (сайт + VK/TG), на странице предупреждение.
+# Своя отметка feed_last: сдвигается только после успешного чтения, чтобы засечённое
+# за время сбоя разобрал следующий прогон (окно ленты — 48 ч)
+for f in ("feed_last.txt", "warnings.txt"):
+    (RUN / f).unlink(missing_ok=True)
+feed_last_file = STATE / "feed_last.txt"
+feed_last = dt.datetime.fromisoformat(feed_last_file.read_text().strip()) if feed_last_file.exists() else last
+try:
+    feed = json.loads(get(os.environ["AI_EDITOR_FEED_URL"], tries=3))
+except (OSError, ValueError) as e:
+    feed = None
+    reason = f"{type(e).__name__}: {e}"[:160]
+    print("сборщик недоступен:", reason)
+    (RUN / "warnings.txt").write_text(f"сборщик на RU VPS недоступен с {feed_last:%d.%m %H:%M} ({reason}) — прогон только по сайту и VK/Telegram",
+                                      encoding="utf-8")
+    out.append(f"## ⚠ Лента сборщика НЕДОСТУПНА ({reason}). Первоисточники и СМИ в этом прогоне не видны — "
+               f"работай по VK/Telegram и сайту; засечённое сборщиком с {feed_last:%d.%m %H:%M} придёт в следующем успешном прогоне.\n")
+if feed is not None:
+    bad = [s["source"] for s in feed["sources"] if s["status"] != 200]
+    out.append(f"Сборщик сформирован {sam(feed['generated_at']):%H:%M}; источники не 200: {bad or 'нет'}\n")
+    out.append(f"## Новое про Сызрань в ленте сборщика (засечено после {feed_last:%d.%m %H:%M})\n")
+    n = 0
+    for i in feed["items"]:
+        if i["syzran"] and sam(i["detected_at"]) > feed_last:
+            p = sam(i["published_at"])
+            n += 1
+            n_new += 1
+            out.append(f"### [{i['kind']}] {i['source']} | {p.strftime('%d.%m %H:%M') if p else 'без даты'} | {i['title']}\n"
+                       f"{i['url']}\n{(i['text'] or '')[:TEXT_MAX]}\n")
+    if not n:
+        out.append("(нет)\n")
+    (RUN / "feed_last.txt").write_text(now.isoformat(timespec="seconds"))  # finish.py переносит в state/ только при успехе
+
+# --- VK/TG-карточки syzran-news
+out.append("## Новое в VK/Telegram (карточки syzran-news)\n")
+n = 0
+for day in {now.date(), (now - dt.timedelta(days=1)).date()}:
+    f = CARDS_DIR / f"cards_{day:%Y-%m-%d}.jsonl"
+    if not f.exists():
+        continue
+    for line in f.read_text(encoding="utf-8").splitlines():
+        c = json.loads(line)
+        src = c["item"]["source_name"]
+        if "(VK)" not in src and "Telegram" not in src:
+            continue
+        if dt.datetime.strptime(c["detected_at"], "%d.%m.%Y %H:%M").replace(tzinfo=SAM) <= last:
+            continue
+        n += 1
+        n_new += 1
+        out.append(f"### {src} | {c['published_at']} | {c['item']['title']}\n{c['item']['link']}\n"
+                   f"{' '.join((c['draft'].get('body') or '').split())[:TEXT_MAX]}\n")
+if not n:
+    out.append("(нет)\n")
+
+# --- сайт: последние 40 новостей; лиды — только за 12 ч; НОВОЕ = id больше, чем в прошлый прогон
+root = ET.fromstring(get(SITE_URL))
+max_file = STATE / "site_max_id.txt"
+prev_max = int(max_file.read_text()) if max_file.exists() else 0
+site_new = 0
+cur_max = prev_max
+out.append("## Сайт syzran-small.ru: последние 40 новостей (ПЛАН = в очереди редакции; НОВОЕ = появилось с прошлого прогона; лид — только за 12 ч)\n")
+for it in root.findall("./channel/item")[:40]:
+    d = parsedate_to_datetime(it.findtext("pubDate")).astimezone(SAM)
+    nid = int(it.findtext("link").rsplit("-", 1)[-1])
+    cur_max = max(cur_max, nid)
+    is_new = nid > prev_max
+    site_new += is_new
+    lead = " ".join((it.findtext("home-text") or "").split())[:220] if (is_new or now - d < dt.timedelta(hours=12)) else ""
+    out.append(f"- {'НОВОЕ ' if is_new else ''}{'ПЛАН ' if d > now else ''}{d:%d.%m %H:%M} news-{nid} | {it.findtext('title')}" + (f" — {lead}" if lead else ""))
+(RUN / "site_max_id.txt").write_text(str(cur_max))  # finish.py переносит в state/ только при успехе
+
+# --- наши предложения: компактная сводка (полный JSON — state/proposals.json, читать только для update)
+props = json.loads((STATE / "proposals.json").read_text(encoding="utf-8")) if (STATE / "proposals.json").exists() else []
+out.append(f"\n## Наши предложения на странице сейчас ({len(props)}); полные поля — state/proposals.json (читать, только если нужно update)\n")
+for p in props:
+    age = (now - dt.datetime.fromisoformat(p["detected_at"])).total_seconds() / 3600
+    first = p.get("lead", "").split(". ")[0][:160]
+    out.append(f"- {p['id']} | {p['block']} | в выдаче {age:.1f} ч | {p['headlines'][0]} — {first}")
+
+(RUN / "started.txt").write_text(now.isoformat(timespec="seconds"))
+(RUN / "input.md").write_text("\n".join(out) + "\n", encoding="utf-8")
+print(f"input.md: {sum(len(x) for x in out)} символов")
+
+# Нового нет — Claude не зовём: страница обновится с этой строкой (run.sh видит код 3)
+if n_new == 0 and site_new == 0:
+    (RUN / "changes.json").write_text(json.dumps({
+        "latest": f"ИИ-редактор: с {last:%H:%M} новых сызранских новостей и публикаций на сайте нет — предложения без изменений (итоговые баллы пересчитаны).",
+        "log": "ИИ-редактор: нового нет, Claude не вызывался", "drop": [], "add": [], "update": [], "skipped": []},
+        ensure_ascii=False), encoding="utf-8")
+    print("нового нет — Claude не нужен")
+    raise SystemExit(3)
