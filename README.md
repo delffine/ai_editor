@@ -53,16 +53,18 @@
 
 ```mermaid
 flowchart TB
-    subgraph RU["RU VPS (доступ к сайтам, закрытым для зарубежных IP)"]
-        COL["collector.py<br/>cron раз в 15 мин"]
-        NEWS[("news.json<br/>48 ч, 19 источников")]
-        COL --> NEWS
-    end
-
     subgraph SRC["Источники"]
         PRIM["Первоисточники:<br/>МВД, МЧС, прокуратура, СК,<br/>правительство области, администрация, дума"]
         MEDIA["СМИ: ГТРК, Волга Ньюс, 63.ru, КТВ-ЛУЧ…"]
         AGG["Агрегаторы: БезФормата, Google News…<br/>только тема, не источник"]
+        SOC["VK и Telegram: паблики администрации,<br/>ведомств, района, СМИ"]
+        RSS["syzran-small.ru: rss-claude.php<br/>опубликованное + очередь редакции"]
+    end
+
+    subgraph RU["RU VPS (доступ к сайтам, закрытым для зарубежных IP)"]
+        COL["collector.py<br/>cron раз в 15 мин"]
+        NEWS[("news.json<br/>48 ч, 19 источников")]
+        COL --> NEWS
     end
 
     subgraph KZ["KZ VPS"]
@@ -79,15 +81,15 @@ flowchart TB
         FEEDPHP["feed.php<br/>лента по токену"]
     end
 
-    subgraph SITE["Сайт syzran-small.ru"]
-        RSS["rss-claude.php<br/>опубликованное + очередь редакции"]
-        ADMIN["Админка, модуль новостей:<br/>Предложка (ИИ)"]
+    subgraph ADM["Админка syzran-small.ru, модуль новостей"]
+        ADMIN["Предложка (ИИ)"]
         ADD["add_news / save_news"]
     end
 
     ED(("Дежурный<br/>редактор"))
 
     PRIM & MEDIA & AGG --> COL
+    SOC --> SN
     NEWS --> FETCH
     SN --> FETCH
     RSS --> FETCH
@@ -101,9 +103,10 @@ flowchart TB
     FIN --> PUBPHP
     FIN --> FEED
     FEED --> FEEDPHP
-    ADMIN -- "POST token" --> FEEDPHP
-    ED --> ADMIN
+    FEEDPHP -- "по запросу админки<br/>с токеном" --> ADMIN
     ADMIN -- "Принять для публикации" --> ADD
+    ADMIN --- ED
+    ADD --- ED
 ```
 
 Как и в [«Городе Н»](https://github.com/delffine/gorod-n), работа поделена так: **детерминированное делает Python, решения принимает модель.** Скрипты скачивают ленты, считают, что нового с прошлого прогона, ведут состояние, пересчитывают баллы, вытесняют лишнее, собирают страницу и публикуют её. Модель читает новое, сверяет факты с сайтом, ищет первоисточник, решает, что предложить, что убрать и что обновить, пишет тексты и проверяет их. Модель не видит токенов и не может ничего опубликовать: агент отбора пишет только файл `run/selected.json`, а рерайт, фактчек и правка возвращают JSON по схеме, который разбирает и применяет код.
