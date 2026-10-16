@@ -25,6 +25,10 @@ last_file = STATE / "last_run.txt"
 last = dt.datetime.fromisoformat(last_file.read_text().strip()) if last_file.exists() else now - dt.timedelta(hours=FIRST_RUN_HOURS)
 
 
+# Верхняя граница окна — только для песочницы (повтор прошлого окна); в бою — сейчас
+UNTIL = dt.datetime.fromisoformat(os.environ["AI_EDITOR_UNTIL"]) if os.environ.get("AI_EDITOR_UNTIL") else now
+
+
 def get(url, tries=4):
     for attempt in range(1, tries + 1):
         try:
@@ -43,6 +47,7 @@ def sam(s):
 
 
 n_new = 0  # всего нового (сборщик + VK/TG)
+sources = {}  # url -> полный текст материала (run/sources.json): по нему пишут рерайт и фактчек
 out = [f"# Вход прогона {now:%d.%m.%Y %H:%M} (Самара). Прошлый прогон: {last:%d.%m %H:%M}\n"]
 
 # --- лента сборщика; недоступна — прогон идёт без неё (сайт + VK/TG), на странице предупреждение.
@@ -68,10 +73,12 @@ if feed is not None:
     out.append(f"## Новое про Сызрань в ленте сборщика (засечено после {feed_last:%d.%m %H:%M})\n")
     n = 0
     for i in feed["items"]:
-        if i["syzran"] and sam(i["detected_at"]) > feed_last:
+        if i["syzran"] and feed_last < sam(i["detected_at"]) <= UNTIL:
             p = sam(i["published_at"])
             n += 1
             n_new += 1
+            sources[i["url"]] = {"name": i["source"], "title": i["title"], "text": i["text"] or "",
+                                 "published": p.strftime("%d.%m.%Y %H:%M") if p else ""}
             out.append(f"### [{i['kind']}] {i['source']} | {p.strftime('%d.%m %H:%M') if p else 'без даты'} | {i['title']}\n"
                        f"{i['url']}\n{(i['text'] or '')[:TEXT_MAX]}\n")
     if not n:
@@ -90,10 +97,12 @@ for day in {now.date(), (now - dt.timedelta(days=1)).date()}:
         src = c["item"]["source_name"]
         if "(VK)" not in src and "Telegram" not in src:
             continue
-        if dt.datetime.strptime(c["detected_at"], "%d.%m.%Y %H:%M").replace(tzinfo=SAM) <= last:
+        if not last < dt.datetime.strptime(c["detected_at"], "%d.%m.%Y %H:%M").replace(tzinfo=SAM) <= UNTIL:
             continue
         n += 1
         n_new += 1
+        sources[c["item"]["link"]] = {"name": src, "title": c["item"]["title"], "published": c["published_at"],
+                                      "text": " ".join((c["draft"].get("body") or "").split())}
         out.append(f"### {src} | {c['published_at']} | {c['item']['title']}\n{c['item']['link']}\n"
                    f"{' '.join((c['draft'].get('body') or '').split())[:TEXT_MAX]}\n")
 if not n:
@@ -108,6 +117,8 @@ cur_max = prev_max
 out.append("## Сайт syzran-small.ru: последние 40 новостей (ПЛАН = в очереди редакции; НОВОЕ = появилось с прошлого прогона; лид — только за 12 ч)\n")
 for it in root.findall("./channel/item")[:40]:
     d = parsedate_to_datetime(it.findtext("pubDate")).astimezone(SAM)
+    if os.environ.get("AI_EDITOR_UNTIL") and d > UNTIL:  # песочница: сайт на момент конца окна
+        continue
     nid = int(it.findtext("link").rsplit("-", 1)[-1])
     cur_max = max(cur_max, nid)
     is_new = nid > prev_max
@@ -125,6 +136,7 @@ for p in props:
     out.append(f"- {p['id']} | {p['block']} | в выдаче {age:.1f} ч | {p['headlines'][0]} — {first}")
 
 (RUN / "started.txt").write_text(now.isoformat(timespec="seconds"))
+(RUN / "sources.json").write_text(json.dumps(sources, ensure_ascii=False), encoding="utf-8")
 (RUN / "input.md").write_text("\n".join(out) + "\n", encoding="utf-8")
 print(f"input.md: {sum(len(x) for x in out)} символов")
 

@@ -260,6 +260,8 @@ feed = {"updated": now.isoformat(timespec="seconds"), "next": nxt and nxt.isofor
                    "sources": parts_of(p.get("sources_html"))}
                   for b in ("urgent", "queue", "reserve") for p in blocks[b]]}
 feed_path = Path(os.environ.get("AI_EDITOR_FEED_JSON", "/var/www/ai-editor/.feed.json"))
+if os.environ.get("AI_EDITOR_DRY"):
+    feed_path = RUN / "feed.json"
 try:
     tmp = feed_path.with_name(feed_path.name + ".tmp")
     tmp.write_text(json.dumps(feed, ensure_ascii=False), encoding="utf-8")
@@ -267,6 +269,10 @@ try:
 except OSError as e:
     print("лента для админки не записана:", e)
 
+if os.environ.get("AI_EDITOR_DRY"):  # песочница: страница — в файл, ничего не публикуем и state не трогаем
+    (RUN / "page.html").write_text(page, encoding="utf-8")
+    (RUN / "proposals.json").write_text(json.dumps(props, ensure_ascii=False, indent=1), encoding="utf-8")
+    sys.exit(print("DRY: run/page.html, run/proposals.json"))
 env = dict(l.strip().split("=", 1) for l in open(Path.home() / ".config" / "ai-editor-publish.env", encoding="utf-8")  # отдельно: Claude этот файл не видит
            if "=" in l and not l.startswith("#"))
 data = urllib.parse.urlencode({"token": env["AI_EDITOR_PUBLISH_TOKEN"], "html": page}).encode()

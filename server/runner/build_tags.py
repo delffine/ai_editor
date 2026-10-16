@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 src, dst = Path(sys.argv[1]), Path(sys.argv[2])
+MIN_USES = 20  # редкие теги не берём: длинный хвост раздувает системный промпт (16.10.2026: 452 -> 311)
 raw = src.read_bytes().decode("cp1251")
 pairs = [(t, int(n)) for t, n in re.findall(r'\$tags\["(.*?)"\]\s*=\s*(\d+);', raw, re.S)]
 bad = [t for t, n in pairs if not t.strip() or t != t.strip() or re.search(r'[,\'"\\\n]|  ', t)]
@@ -23,7 +24,7 @@ for t, n in pairs:
     k = t.lower()
     if k not in good or n > good[k][1]:
         good[k] = (t, n)
-tags = sorted(good.values(), key=lambda x: (-x[1], x[0].lower()))
+tags = sorted((v for v in good.values() if v[1] >= MIN_USES), key=lambda x: (-x[1], x[0].lower()))
 dst.write_text(
     "# Теги сайта (поле tags в предложениях)\n\n"
     "Теги — ключевые слова новости на сайте. Бери **только** теги из этого списка, **буква в букву** "
@@ -32,4 +33,4 @@ dst.write_text(
     "ведомство или персона, о которой она). В скобках — сколько раз тег использован на сайте.\n\n"
     + "; ".join(f"{t} ({n})" for t, n in tags) + "\n", encoding="utf-8", newline="\n")  # LF: файл для Linux
 print(f"тегов: {len(tags)} (всего {len(pairs)}, отброшено ошибочных {len(bad)}, дублей по регистру "
-      f"{len(pairs) - len(bad) - len(tags)}): {bad}")
+      f"{len(pairs) - len(bad) - len(good)}, редких {len(good) - len(tags)}): {bad}")
