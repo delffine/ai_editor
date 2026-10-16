@@ -68,7 +68,6 @@ flowchart TB
     end
 
     subgraph KZ["KZ VPS"]
-        SN["syzran-news<br/>(соседний проект)<br/>VK/Telegram-карточки"]
         subgraph RUN["Прогон: cron 5,35 7-21 * * 1-5"]
             FETCH["fetch.py<br/>→ run/input.md + sources.json"]
             CC["Этап 1, отбор: Claude Code<br/>(claude -p + rules.md)"]
@@ -81,17 +80,23 @@ flowchart TB
         FEEDPHP["feed.php<br/>лента по токену"]
     end
 
-    subgraph ADM["Админка syzran-small.ru, модуль новостей"]
-        ADMIN["Предложка (ИИ)"]
-        ADD["add_news / save_news"]
+    subgraph DESK[" "]
+        direction LR
+        ED(("Дежурный<br/>редактор"))
+        subgraph ADM["Админка syzran-small.ru, модуль новостей"]
+            direction TB
+            ADMIN["Предложка (ИИ)"]
+            ADD["add_news / save_news"]
+            ADMIN -- "Принять для публикации" --> ADD
+        end
+        ED -- "выбирает, вычитывает" --> ADM
     end
 
-    ED(("Дежурный<br/>редактор"))
+    PUB(["Публикация новости<br/>на syzran-small.ru"])
 
     PRIM & MEDIA & AGG --> COL
-    SOC --> SN
     NEWS --> FETCH
-    SN --> FETCH
+    SOC --> FETCH
     RSS --> FETCH
     STATE --> FETCH
     FETCH --> CC
@@ -103,10 +108,9 @@ flowchart TB
     FIN --> PUBPHP
     FIN --> FEED
     FEED --> FEEDPHP
-    FEEDPHP -- "по запросу админки<br/>с токеном" --> ADMIN
-    ADMIN -- "Принять для публикации" --> ADD
-    ADMIN --- ED
-    ADD --- ED
+    FEEDPHP -- "по запросу админки<br/>с токеном" --> DESK
+    DESK --> PUB
+    style DESK fill:none,stroke:none
 ```
 
 Как и в [«Городе Н»](https://github.com/delffine/gorod-n), работа поделена так: **детерминированное делает Python, решения принимает модель.** Скрипты скачивают ленты, считают, что нового с прошлого прогона, ведут состояние, пересчитывают баллы, вытесняют лишнее, собирают страницу и публикуют её. Модель читает новое, сверяет факты с сайтом, ищет первоисточник, решает, что предложить, что убрать и что обновить, пишет тексты и проверяет их. Модель не видит токенов и не может ничего опубликовать: агент отбора пишет только файл `run/selected.json`, а рерайт, фактчек и правка возвращают JSON по схеме, который разбирает и применяет код.
