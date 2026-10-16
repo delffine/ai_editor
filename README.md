@@ -51,67 +51,7 @@
 | Зарубежный VPS (Казахстан) | прогоны агента: Claude Code, `fetch.py` / `finish.py`, страница ИИ-редактора, лента для админки. Зарубежный — потому что Anthropic недоступен с российских IP |
 | Российский VPS | сканирование источников: `collector.py` обходит сайты, закрытые для зарубежных IP (правительство области, минтранс, СК, ГТРК), и отдаёт агенту одну JSON-ленту |
 
-```mermaid
-flowchart TB
-    subgraph SRC["Источники"]
-        PRIM["Первоисточники:<br/>МВД, МЧС, прокуратура, СК,<br/>правительство области, администрация, дума"]
-        MEDIA["СМИ: ГТРК, Волга Ньюс, 63.ru, КТВ-ЛУЧ…"]
-        AGG["Агрегаторы: БезФормата, Google News…<br/>только тема, не источник"]
-        SOC["VK и Telegram: паблики администрации,<br/>ведомств, района, СМИ"]
-        RSS["syzran-small.ru: rss-claude.php<br/>опубликованное + очередь редакции"]
-    end
-
-    subgraph RU["RU VPS (доступ к сайтам, закрытым для зарубежных IP)"]
-        COL["collector.py<br/>cron раз в 15 мин"]
-        NEWS[("news.json<br/>48 ч, 19 источников")]
-        COL --> NEWS
-    end
-
-    subgraph KZ["KZ VPS"]
-        subgraph RUN["Прогон: cron 5,35 7-21 * * 1-5"]
-            FETCH["fetch.py<br/>→ run/input.md + sources.json"]
-            CC["Этап 1, отбор: Claude Code<br/>(claude -p + rules.md)"]
-            ST["Этап 2, stages.py: рерайт → фактчек → правка<br/>(claude -p без инструментов, JSON-схема)"]
-            FIN["Этап 3, finish.py<br/>баллы, лимиты, страница"]
-        end
-        STATE[("state/proposals.json")]
-        PUBPHP["publish.php<br/>index.html + archive/"]
-        FEED[(".feed.json")]
-        FEEDPHP["feed.php<br/>лента по токену"]
-    end
-
-    subgraph DESK[" "]
-        direction LR
-        ED(("Дежурный<br/>редактор"))
-        subgraph ADM["Админка syzran-small.ru, модуль новостей"]
-            direction TB
-            ADMIN["Предложка (ИИ)"]
-            ADD["add_news / save_news"]
-            ADMIN -- "Принять для публикации" --> ADD
-        end
-        ED -- "выбирает, вычитывает" --> ADM
-    end
-
-    PUB(["Публикация новости<br/>на syzran-small.ru"])
-
-    PRIM & MEDIA & AGG --> COL
-    NEWS --> FETCH
-    SOC --> FETCH
-    RSS --> FETCH
-    STATE --> FETCH
-    FETCH --> CC
-    CC -. "WebFetch / curl:<br/>дойти до первоисточника" .-> PRIM
-    CC -- "run/selected.json:<br/>решения + фактура" --> ST
-    FETCH -- "run/sources.json" --> ST
-    ST -- "run/changes.json" --> FIN
-    STATE <--> FIN
-    FIN --> PUBPHP
-    FIN --> FEED
-    FEED --> FEEDPHP
-    FEEDPHP -- "по запросу админки<br/>с токеном" --> DESK
-    DESK --> PUB
-    style DESK fill:none,stroke:none
-```
+<img src="gitimg/architecture.png" width="100%" alt="Схема архитектуры: источники (агрегаторы, СМИ, первоисточники, VK и Telegram, сайт) → RU VPS со сборщиком → KZ VPS: fetch.py, этап 1 — отбор (Claude Code), этап 2 — stages.py (рерайт, фактчек, правка), этап 3 — finish.py, proposals.json, publish.php, лента для админки → админка сайта: Предложка (ИИ) и форма новости, дежурный редактор → публикация новости">
 
 Как и в [«Городе Н»](https://github.com/delffine/gorod-n), работа поделена так: **детерминированное делает Python, решения принимает модель.** Скрипты скачивают ленты, считают, что нового с прошлого прогона, ведут состояние, пересчитывают баллы, вытесняют лишнее, собирают страницу и публикуют её. Модель читает новое, сверяет факты с сайтом, ищет первоисточник, решает, что предложить, что убрать и что обновить, пишет тексты и проверяет их. Модель не видит токенов и не может ничего опубликовать: агент отбора пишет только файл `run/selected.json`, а рерайт, фактчек и правка возвращают JSON по схеме, который разбирает и применяет код.
 
