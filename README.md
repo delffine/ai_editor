@@ -65,42 +65,7 @@
 
 ## Прогон по шагам
 
-```mermaid
-sequenceDiagram
-    participant CR as cron (run.sh)
-    participant F as fetch.py
-    participant C as Отбор (Claude Code)
-    participant W as Интернет
-    participant S as stages.py
-    participant FN as finish.py
-    participant P as publish.php
-
-    CR->>CR: flock: прошлый прогон ещё идёт → пропуск
-    CR->>F: python3 fetch.py
-    F->>F: лента сборщика, VK/TG-карточки, rss-claude.php,<br/>сводка своих предложений → run/input.md<br/>полные тексты → run/sources.json
-    alt нового нет
-        F-->>CR: код 3, changes.json «нового нет»
-    else есть новое
-        CR->>C: claude -p select.md<br/>--append-system-prompt rules.md
-        C->>C: Read run/input.md
-        C->>W: curl / WebFetch первоисточников (до ~25 запросов)
-        C->>C: Write run/selected.json + проверка json.load
-        CR->>S: python3 stages.py
-        loop каждая новость (2 параллельно)
-            S->>S: рерайт: фактура → 3 заголовка, лид, текст,<br/>рубрика, теги, превью
-            S->>S: фактчек: ok / fix / stop
-            opt fix (до 3 проверок)
-                S->>S: правка: точечные замены, применяет код
-            end
-        end
-        S->>S: run/changes.json, run/stages.json
-    end
-    CR->>FN: python3 finish.py
-    FN->>FN: drop / add / update → proposals.json<br/>фильтр тегов, рубрик, превью, штрафы, затухание, лимиты
-    FN->>FN: .feed.json для админки
-    FN->>P: POST token + html
-    P->>P: старую страницу → archive/, метка времени
-```
+<img src="gitimg/pipeline.png" width="100%" alt="Прогон по шагам: cron → fetch.py → есть новое? → этап 1 отбор (Read, curl/WebFetch, Write selected.json) → этап 2 stages.py (рерайт → фактчек → при fix точечная правка, до 3 проверок) → этап 3 finish.py → publish.php">
 
 ### 0. cron и `run.sh`
 
@@ -171,24 +136,7 @@ sequenceDiagram
 
 ## Жизненный цикл предложения
 
-```mermaid
-stateDiagram-v2
-    [*] --> urgent: add (событие последних часов)
-    [*] --> queue: add
-    [*] --> reserve: add (спорт, культура, справочное, срок expires)
-    urgent --> queue: 2 прогона или 70 мин
-    queue --> queue: update (refresh — возраст сбрасывается)
-    urgent --> taken: сайт выпустил после нас
-    queue --> taken: сайт выпустил после нас
-    reserve --> taken: сайт выпустил после нас
-    queue --> evicted: лимит 10, низкий итоговый балл
-    reserve --> evicted: лимит 8
-    queue --> dropped: устарело, дубль, опровергнуто
-    reserve --> dropped: истёк expires
-    taken --> [*]: «Взято редакцией»
-    evicted --> [*]: «Отсеяно»
-    dropped --> [*]
-```
+<img src="gitimg/lifecycle.png" width="100%" alt="Жизненный цикл предложения: add в Срочно, В очередь или Запас; из Срочно в очередь через 2 прогона или 70 минут; update в очереди; исходы — взято редакцией, отсеяно лимитом, убрано">
 
 ## Интеграция с админкой сайта
 
@@ -202,22 +150,7 @@ stateDiagram-v2
 | `server/admin/feed.php` | на VPS: отдаёт `.feed.json` по токену |
 | `server/claude-rss.php` | на сайте: лента для агента — полный текст, просмотры, источник, рубрика, теги, превью и **запланированные** новости (очередь редакции) |
 
-```mermaid
-sequenceDiagram
-    actor E as Редактор
-    participant N as news.php (админка)
-    participant F as feed.php (VPS)
-    participant A as add_news / save_news
-
-    E->>N: Предложка (ИИ)
-    N->>F: POST token
-    F-->>N: .feed.json (JSON в ASCII)
-    N-->>E: карточки: 3 заголовка, лид, текст, источник,<br/>рубрика, теги, превью, что проверить, балл
-    E->>N: выбрать заголовок, «Принять для публикации»
-    N->>A: форма с заполненными полями, теги — скрытым полем
-    A->>A: теги сверяются с tagarray.php
-    E->>A: вычитать, поставить время, «Добавить»
-```
+<img src="gitimg/admin-feed.png" width="100%" alt="Предложка в админке: редактор открывает Предложку, news.php запрашивает ленту у feed.php по токену, редактор выбирает заголовок и принимает, форма add_news заполнена, теги сверяются с tagarray.php, редактор публикует">
 
 Токен VPS в браузер не попадает: браузер общается только с `news.php` под сессией админа, на VPS ходит сервер сайта. Ответ VPS — JSON в чистом ASCII, поэтому перекодировать cp1251 ↔ UTF-8 не нужно. Время следующего обновления берётся из ленты, и страница подсказывает редактору, когда её обновить.
 
@@ -272,15 +205,7 @@ sequenceDiagram
 
 ### Варианты
 
-```mermaid
-flowchart LR
-    IN["run/input.md<br/>+ правила"] --> AG{"Агент"}
-    AG -- "сейчас" --> CC["Claude Code<br/>+ Claude"]
-    AG -- "вариант 1" --> PX["Claude Code<br/>+ другая модель<br/>через прокси"]
-    AG -- "вариант 2" --> OA["открытая агентная оболочка<br/>+ любая модель"]
-    AG -- "вариант 3" --> PY["свой цикл на Python<br/>+ любая модель"]
-    CC & PX & OA & PY --> OUT["run/selected.json"] --> ST["stages.py<br/>рерайт, фактчек:<br/>любая модель по API"] --> FIN["finish.py<br/>проверка и лимиты"]
-```
+<img src="gitimg/plans.png" width="100%" alt="Варианты агента для этапа отбора: сейчас Claude Code + Claude; вариант 1 — Claude Code + другая модель через прокси; вариант 2 — открытая агентная оболочка; вариант 3 — свой цикл на Python; дальше selected.json → stages.py (любая модель по API) → finish.py">
 
 1. **Оставить Claude Code и подставить другую модель.** Claude Code умеет ходить не в Anthropic, а на адрес из `ANTHROPIC_BASE_URL`. Туда ставится прокси-переводчик (например, LiteLLM), который отправит запросы в другую модель. Это самый быстрый путь, но неподдерживаемый: оболочка и промпты заточены под Claude, а сам Claude Code всё равно остаётся продуктом Anthropic.
 2. **Открытая агентная оболочка.** Есть агенты с открытым кодом, которые работают с любой OpenAI-совместимой моделью и умеют то же, что нужно здесь: читать файлы, вызывать `curl`, ограничивать права, писать результат. Переносятся `select.md` и правила, белый список команд настраивается заново.
