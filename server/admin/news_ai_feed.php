@@ -2,24 +2,23 @@
 // Предложка ИИ-редактора (in=ai_feed). Лента предложений последнего прогона
 // ИИ-редактора (блоки «Срочно», «В очередь», «Запас») - та же, что на
 // http://VPS_HOST:8808/ai-editor/. Забирается с VPS при открытии
-// страницы (rewrite.php action=feed, токен AI_RW_TOKEN из блока рерайта).
+// страницы (feed.php, токен AI_TOKEN из news_ai_common.php).
 // Ответ VPS - JSON в чистом ASCII, в страницу он вставляется как есть
 // (после json_decode/json_encode) - перекодировка cp1251 не нужна. HTML с VPS
 // не принимается: страницу собирает JS из текстовых полей.
 // «Принять для публикации» -> форма add_news с выбранным заголовком, лидом,
-// текстом, первым источником, рубрикой и превью из банка (ai_rw_prefill); теги - скрытым полем keywords
+// текстом, первым источником, рубрикой и превью из банка (ai_prefill); теги - скрытым полем keywords
 // (в форме их не видно, save_news сверяет с tagarray.php - ai_feed_keywords).
 // ---------------------------------------------------------------------
 function ai_feed() {
     include('header.php');
     echo '<font color="FF9933"><b>></font>&nbsp;<a href="admin.php?go=news&in=add_news">'._ADDNEWNEWS.'</a></b>'."\n"
-    .'&nbsp;&nbsp;<font color="FF9933"><b>></font>&nbsp;<a href="admin.php?go=news&in=ai_rewrite">Рерайт (ИИ)</a></b>'."\n"
-//  .'&nbsp;&nbsp;<font color="FF9933"><b>></font>&nbsp;<a href="admin.php?go=news&in=ai_feed">Предложка (ИИ)</a></b>'."\n"
+    .'&nbsp;&nbsp;<font color="FF9933"><b>></font>&nbsp;<a href="admin.php?go=news&in=ai_feed">Предложка (ИИ)</a></b>'."\n"
     .'&nbsp;&nbsp;<font color="FF9933"><b>></font>&nbsp;<a href="admin.php?go=news&in=previmg">Банк превью-фото</a></b>'."\n"
     .'&nbsp;&nbsp;<font color="FF9933"><b>></font>&nbsp;<a href="admin.php?go=news&in=all_tag">Управление ТЭГами</a></b><br><br>'."\n";
-    $d = json_decode(ai_rw_call(array('action' => 'feed')), true);
+    $d = json_decode(ai_call(array('action' => 'feed')), true);
     $js = is_array($d) ? json_encode($d) : false;
-    if ($js === false) $js = ai_rw_err('Не удалось разобрать ленту предложений');
+    if ($js === false) $js = ai_err('Не удалось разобрать ленту предложений');
 ?>
 <style>
 #aif { width: 760px; text-align: left; font-family: Arial, sans-serif; font-size: 13px; }

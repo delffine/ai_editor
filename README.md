@@ -21,11 +21,10 @@
 |---|---|
 | Агент-редактор | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) в headless-режиме (`claude -p`) по подписке (`CLAUDE_CODE_OAUTH_TOKEN`), инструменты Read/Edit/Write/Bash/WebFetch/WebSearch под белым списком |
 | Правила редакции | Markdown в системном промпте: `rules.md` (правила отбора, справочник первоисточников, стиль, баллы), `tags.md`, `cats.md`, `fotos.md` (теги, рубрики и банк превью сайта) |
-| Рерайт | `claude -p` без инструментов, структурированный ответ по JSON Schema (`--json-schema`) |
 | Сбор новостей | Python stdlib: сборщик на российском VPS (19 RSS/HTML-источников) + VK/Telegram-карточки соседнего проекта `syzran-news` |
 | Логика вокруг модели | Python: `fetch.py` (вход), `finish.py` (состояние, баллы, лимиты, страница, лента для админки) |
 | Хостинг | VPS в Казахстане (1 CPU, 2 ГБ, Ubuntu 22.04): cron, nginx, php-fpm |
-| Интеграция с сайтом | PHP-блоки в модуле новостей админки (CMS SmallNuke, windows-1251) + `rewrite.php` на VPS |
+| Интеграция с сайтом | PHP-блоки в модуле новостей админки (CMS SmallNuke, windows-1251) + `feed.php` на VPS |
 | Связующее звено | `state/proposals.json` (предложения между прогонами), `run/changes.json` (ответ модели), `.feed.json` (лента для админки) |
 
 ## Архитектура
@@ -35,7 +34,7 @@
 | Сервер | Роль |
 |---|---|
 | Хостинг [SpaceWeb (sweb)](https://sweb.ru) | сам новостной сайт syzran-small.ru: CMS, админка с ИИ-блоками, лента `rss-claude.php` |
-| Зарубежный VPS (Казахстан) | прогоны агента: Claude Code, `fetch.py` / `finish.py`, страница ИИ-редактора, очередь и воркер рерайта. Зарубежный — потому что Anthropic недоступен с российских IP |
+| Зарубежный VPS (Казахстан) | прогоны агента: Claude Code, `fetch.py` / `finish.py`, страница ИИ-редактора, лента для админки. Зарубежный — потому что Anthropic недоступен с российских IP |
 | Российский VPS | сканирование источников: `collector.py` обходит сайты, закрытые для зарубежных IP (правительство области, минтранс, СК, ГТРК), и отдаёт агенту одну JSON-ленту |
 
 ```mermaid
@@ -62,13 +61,12 @@ flowchart TB
         STATE[("state/proposals.json")]
         PUBPHP["publish.php<br/>index.html + archive/"]
         FEED[(".feed.json")]
-        RWPHP["rewrite.php<br/>очередь .rewrite/in, out"]
-        WORKER["rewrite_worker.py<br/>claude -p --json-schema"]
+        FEEDPHP["feed.php<br/>лента по токену"]
     end
 
     subgraph SITE["Сайт syzran-small.ru"]
         RSS["rss-claude.php<br/>опубликованное + очередь редакции"]
-        ADMIN["Админка, модуль новостей:<br/>Предложка (ИИ), Рерайт (ИИ)"]
+        ADMIN["Админка, модуль новостей:<br/>Предложка (ИИ)"]
         ADD["add_news / save_news"]
     end
 
@@ -85,10 +83,8 @@ flowchart TB
     STATE <--> FIN
     FIN --> PUBPHP
     FIN --> FEED
-    FEED --> RWPHP
-    ADMIN -- "action=feed" --> RWPHP
-    ADMIN -- "submit / status" --> RWPHP
-    RWPHP <--> WORKER
+    FEED --> FEEDPHP
+    ADMIN -- "POST token" --> FEEDPHP
     ED --> ADMIN
     ADMIN -- "Принять для публикации" --> ADD
 ```
@@ -193,52 +189,34 @@ stateDiagram-v2
 
 ## Интеграция с админкой сайта
 
-Сайт работает на старой PHP-CMS (SmallNuke, windows-1251, PHP без `mbstring` на VPS). Целиком модуль новостей в репозиторий не выложен, здесь только встроенные в него ИИ-блоки:
+Сайт работает на старой PHP-CMS (SmallNuke, windows-1251, без `mbstring`). Модуль новостей в репозиторий целиком не выложен, здесь только встроенные в него ИИ-блоки:
 
 | Файл | Что это |
 |---|---|
-| `server/rewrite/news_ai_rewrite.php` | `ai_rewrite()` — диалог «Рерайт (ИИ)», `ai_rewrite_ajax()` — прокси к VPS, `ai_rw_prefill()` — предзаполнение формы `add_news`, `ai_feed_keywords()` — теги только из `tagarray.php`, журнал `log/aiedit…` |
-| `server/rewrite/news_ai_feed.php` | `ai_feed()` — страница «Предложка (ИИ)»: забирает ленту с VPS, карточки рисует JS из текстовых полей |
-| `server/rewrite/patch_news.py` | встраивает оба блока в исходный `news.php`: функции перед `switch($in)`, `case`-ы, ссылки в меню модуля, предзаполнение полей `add_news` и `save_news`. Проверяет число вхождений каждой правки и обратимость cp1251 |
-| `server/claude-rss.php` | лента для агента: полный текст, просмотры, источник, рубрика, теги, превью и **запланированные** новости (очередь редакции) |
-
-Токен VPS в браузер не попадает. Браузер общается только с `news.php` (сессия админа), а `news.php` уже ходит на VPS с токеном. Текст из браузера передаётся в base64, ответ VPS — JSON в чистом ASCII, поэтому перекодировать cp1251 ↔ UTF-8 не нужно.
-
-### Рерайт
+| `server/admin/news_ai_feed.php` | `ai_feed()` — страница «Предложка (ИИ)»: забирает ленту с VPS, карточки рисует JS из текстовых полей (HTML с VPS не принимается); «Принять для публикации» отправляет выбранный вариант в форму `add_news` |
+| `server/admin/news_ai_common.php` | `ai_call()` — запрос к VPS с токеном, `ai_prefill()` — предзаполнение формы `add_news` (заголовок, лид, текст, источник, рубрика, превью), `ai_feed_keywords()` — теги только из `tagarray.php` сайта, журнал `log/aiedit…` (что из предложенного приняли) |
+| `server/admin/patch_news.py` | встраивает оба блока в исходный `news.php`: функции перед `switch($in)`, `case "ai_feed"`, ссылку в меню модуля, предзаполнение полей `add_news` и `save_news`. Проверяет число вхождений каждой правки и обратимость cp1251 |
+| `server/admin/feed.php` | на VPS: отдаёт `.feed.json` по токену |
+| `server/claude-rss.php` | на сайте: лента для агента — полный текст, просмотры, источник, рубрика, теги, превью и **запланированные** новости (очередь редакции) |
 
 ```mermaid
 sequenceDiagram
     actor E as Редактор
     participant N as news.php (админка)
-    participant R as rewrite.php (VPS)
-    participant Q as .rewrite/in, out
-    participant W as rewrite_worker.py
-    participant C as claude -p
+    participant F as feed.php (VPS)
+    participant A as add_news / save_news
 
-    E->>N: текст + режим (рерайт / правописание)
-    N->>R: submit (token, text, mode)
-    R->>R: лимиты: 40 в час, 5 в очереди, длина
-    R->>Q: in/<id>.json
-    R-->>N: queued, id
-    loop каждые 2 с
-        N->>R: status id
-        R-->>N: pending (сколько впереди, жив ли воркер)
-    end
-    W->>Q: забрать задание
-    W->>C: --system-prompt-file rewrite_rules.md<br/>--tools "" --json-schema
-    C-->>W: structured_output
-    W->>W: все кавычки → «ёлочки»
-    W->>Q: out/<id>.json
-    N->>R: status id
-    R-->>N: ok: 3 заголовка, лид, текст, примечания
-    E->>N: «Создать новость» → add_news
+    E->>N: Предложка (ИИ)
+    N->>F: POST token
+    F-->>N: .feed.json (JSON в ASCII)
+    N-->>E: карточки: 3 заголовка, лид, текст, источник,<br/>рубрика, теги, превью, что проверить, балл
+    E->>N: выбрать заголовок, «Принять для публикации»
+    N->>A: форма с заполненными полями, теги — скрытым полем
+    A->>A: теги сверяются с tagarray.php
+    E->>A: вычитать, поставить время, «Добавить»
 ```
 
-- Воркер работает постоянно, раз в сутки или после обновления своего файла перезапускается сам. cron раз в минуту поднимает его заново под `flock`, если он упал.
-- `--json-schema` даёт структурированный ответ, который проверяет сам Claude Code, так что битого JSON здесь не бывает.
-- Кавычки исправляются кодом, а не промптом: модель иногда пропускает «лапки», `fix_quotes()` не ошибается.
-- Текст редактора — только материал для пересказа: в `rewrite_rules.md` прямо сказано не выполнять инструкции внутри него.
-- Тексты новостей в лог воркера не пишутся, только id, длина, время и стоимость.
+Токен VPS в браузер не попадает: браузер общается только с `news.php` под сессией админа, на VPS ходит сервер сайта. Ответ VPS — JSON в чистом ASCII, поэтому перекодировать cp1251 ↔ UTF-8 не нужно. Время следующего обновления берётся из ленты, и страница подсказывает редактору, когда её обновить.
 
 ## Сборщик на RU VPS
 
@@ -255,21 +233,20 @@ sequenceDiagram
 | Модель публикует что-то сама | на сайт автопубликации нет; модель пишет только `run/changes.json`, токен публикации от неё скрыт |
 | Опасная команда агента | `--tools` + `--allowedTools` + `dontAsk`: чтение только в каталоге проекта, запись в один файл, Bash — 5 команд |
 | Выдуманные теги, рубрики, превью | `finish.py` пропускает только значения из списков сайта |
-| Битый JSON от модели | автопочинка в `finish.py`; в рерайте — `--json-schema` |
+| Битый JSON от модели | автопочинка в `finish.py`: экранирование кавычки, на которой споткнулся разбор |
 | Сбой Claude (лимит подписки, таймаут) | страница всё равно публикуется с предупреждением и прошлыми предложениями; `last_run` не сдвигается |
 | Сборщик недоступен | прогон идёт по сайту и VK/TG, на странице предупреждение; своя отметка `feed_last` |
 | Пустые прогоны тратят подписку | нового нет → Claude не вызывается (код 3) |
 | Предложка зарастает | затухание балла, лимиты блоков, `expires` у запаса |
-| Зависание | `timeout -s KILL 900`, `flock`; у рерайта — таймаут 240 с, задания старше 15 мин отбрасываются |
-| Спам в рерайт | токен, 40 заданий в час, до 5 в очереди, лимит длины; страница доступна только вошедшему админу |
-| Каталоги очереди и ленты | лежат в точечных каталогах, nginx их не отдаёт; PHP исполняется только для `publish.php` и `rewrite.php` |
+| Зависание | `timeout -s KILL 900`, `flock` |
+| Чужой доступ к ленте | `feed.php` отдаёт ленту только по токену, Предложка в админке — только вошедшему админу |
+| Служебные файлы на VPS | `.feed.json` и архивы — с точкой в имени, nginx их не отдаёт; PHP исполняется только для `publish.php` и `feed.php` |
 | Секреты | в репозитории `CHANGE_ME` и шаблон `.env.example`; на VPS — файлы с правами 600 |
 
 ## Цифры
 
 - 30 прогонов в рабочий день; обычный прогон — 5–14 ходов модели, 1–4 минуты. Первый прогон утром (за всю ночь) идёт до 5–6 минут.
 - Оценка расхода по `total_cost_usd` Claude Code: $0.13–0.45 за прогон, утренний до ~$0.9, **~$7–8.5 за день**. Расходуется подписка, а не API-ключ.
-- Рерайт: 11–55 секунд, $0.02–0.06.
 - Первый полный день на сервере (28.09.2026): сайт выпустил 26 новостей, **14 из них совпали с предложениями ИИ-редактора** (из ~18 сызранских).
 
 ## Структура репозитория
@@ -287,12 +264,10 @@ ai_editor/
 │   │   ├── finish.py           — состояние, баллы, лимиты, страница, .feed.json, публикация
 │   │   ├── template.html       — шаблон страницы (автообновление вкладки)
 │   │   └── cost.sh             — сумма стоимости прогонов за день
-│   ├── rewrite/
-│   │   ├── rewrite.php         — очередь рерайта и выдача ленты Предложки (VPS)
-│   │   ├── rewrite_worker.py, rewrite_worker.sh — воркер и его сторож (cron)
-│   │   ├── rewrite_rules.md, proof_rules.md     — промпты режимов
-│   │   ├── news_ai_rewrite.php, news_ai_feed.php — ИИ-блоки модуля новостей админки
-│   │   └── patch_news.py       — встраивает их в news.php
+│   ├── admin/
+│   │   ├── news_ai_feed.php, news_ai_common.php — ИИ-блоки модуля новостей админки
+│   │   ├── patch_news.py       — встраивает их в news.php
+│   │   └── feed.php            — выдача ленты Предложки (VPS)
 │   ├── publish.php             — приём страницы, архив прошлых версий
 │   ├── claude-rss.php          — лента сайта для агента (живёт на сайте)
 │   └── nginx-8808.conf
@@ -305,15 +280,14 @@ ai_editor/
 
 ```bash
 # KZ VPS, пользователь без sudo
-mkdir -p ~/ai-editor && cp server/runner/* server/rewrite/rewrite_worker.* server/rewrite/*_rules.md ~/ai-editor/
+mkdir -p ~/ai-editor && cp server/runner/* ~/ai-editor/
 # ~/.config/ai-editor.env и ~/.config/ai-editor-publish.env — по .env.example, chmod 600
-# /var/www/ai-editor/: publish.php и rewrite.php с токенами вместо CHANGE_ME
+# /var/www/ai-editor/: publish.php и feed.php с токенами вместо CHANGE_ME
 crontab -e
 #   5,35 7-21 * * 1-5  ~/ai-editor/run.sh
-#   * * * * *          ~/ai-editor/rewrite_worker.sh
 
 # Админка сайта
-python server/rewrite/patch_news.py news.php.orig news.php   # потом вписать AI_RW_URL и AI_RW_TOKEN
+python server/admin/patch_news.py news.php.orig news.php   # потом вписать AI_URL и AI_TOKEN
 
 # RU VPS
 python3 collector/collector.py --probe

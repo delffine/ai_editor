@@ -217,7 +217,7 @@ page = page.replace("{{LOG}}", "\n".join(f"<li>{x}</li>" for x in log)).replace(
 
 
 # Лента для «Предложки (ИИ)» в админке сайта (news.php?in=ai_feed забирает её через
-# rewrite.php action=feed). HTML отсюда в админку не идёт: метки и примечания — текстом,
+# feed.php). HTML отсюда в админку не идёт: метки и примечания — текстом,
 # источники — списком ссылок; рисует админка сама. Точечный файл nginx наружу не отдаёт.
 def text_of(s):
     s = re.sub(r"<[^>]+>", "", re.sub(r"<(br|/p|/li)\b[^>]*>", " ", s or "", flags=re.I))
