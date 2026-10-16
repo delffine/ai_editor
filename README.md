@@ -110,7 +110,7 @@ sequenceDiagram
         C->>C: Write run/changes.json + проверка json.load
     end
     CR->>FN: python3 finish.py
-    FN->>FN: drop / add / update → proposals.json<br/>фильтр тегов, рубрик, превью; штрафы; затухание; лимиты
+    FN->>FN: drop / add / update → proposals.json<br/>фильтр тегов, рубрик, превью, штрафы, затухание, лимиты
     FN->>FN: .feed.json для админки
     FN->>P: POST token + html
     P->>P: старую страницу → archive/, метка времени
